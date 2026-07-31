@@ -31,7 +31,7 @@ test("HTTP CONNECT proxy accepts CONNECT and dials direct exit", async () => {
 
   // Issue a CONNECT request
   const got = await new Promise((resolve, reject) => {
-    const client = net.connect(proxyPort, () => {
+    const client = net.connect({ host: "127.0.0.1", port: proxyPort }, () => {
       client.write(`CONNECT 127.0.0.1:${targetPort} HTTP/1.1\r\nHost: 127.0.0.1:${targetPort}\r\n\r\n`);
     });
     let buf = "";
@@ -67,7 +67,7 @@ test("HTTP CONNECT returns 400 for malformed target", async () => {
   const proxy = await createHttpProxyServer({ host: "127.0.0.1", port: proxyPort, getExit: () => null, meter: null });
 
   const status = await new Promise((resolve) => {
-    const client = net.connect(proxyPort, () => {
+    const client = net.connect({ host: "127.0.0.1", port: proxyPort }, () => {
       client.write("CONNECT not-a-valid-host HTTP/1.1\r\nHost: x\r\n\r\n");
     });
     let buf = "";
