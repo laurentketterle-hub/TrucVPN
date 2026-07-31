@@ -1,12 +1,11 @@
 "use strict";
 
-const { describe, it, after } = require("node:test");
 const assert = require("node:assert/strict");
 const net = require("node:net");
 const session = require("../src/session");
 
 describe("session", () => {
-  after(async () => {
+  afterAll(async () => {
     try {
       await session.disconnect();
     } catch {
