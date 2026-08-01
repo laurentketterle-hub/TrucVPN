@@ -4,7 +4,9 @@ const http = require("node:http");
 const os = require("node:os");
 const { loadConfig, saveConfig } = require("./config");
 const session = require("./session");
-const { listExits } = require("./catalog");
+const { listExits, summarizeRegions } = require("./catalog");
+const killswitch = require("./killswitch");
+const tun = require("./tun");
 const pkg = require("../package.json");
 
 async function startDashboard({ host, port } = {}) {
@@ -47,8 +49,47 @@ async function startControlDaemon({ host, port } = {}) {
             "POST /api/config",
             "POST /api/connect",
             "POST /api/disconnect",
-            "GET /api/proxy.pac"
+            "GET /api/proxy.pac",
+            "GET /api/killswitch/status",
+            "POST /api/killswitch/arm",
+            "POST /api/killswitch/disarm",
+            "GET /api/tun/status",
+            "GET /api/balancer/status",
+            "POST /api/connect --multi-hop"
           ]
+        });
+      }
+      if (url.pathname === "/api/killswitch/status") {
+        return json(res, killswitch.status());
+      }
+      if (url.pathname === "/api/killswitch/arm" && req.method === "POST") {
+        const data = await readJsonBody(req);
+        const result = killswitch.arm({
+          mode: data.mode || "strict",
+          proxyPorts: data.proxyPorts || [
+            loadConfig().localSocksPort,
+            loadConfig().localHttpPort,
+          ],
+        });
+        return json(res, result);
+      }
+      if (url.pathname === "/api/killswitch/disarm" && req.method === "POST") {
+        return json(res, killswitch.disarm());
+      }
+      if (url.pathname === "/api/tun/status") {
+        return json(res, tun.tunStatus());
+      }
+      if (url.pathname === "/api/balancer/status") {
+        const sess = session.getActive();
+        if (sess && sess.balancer) {
+          return json(res, sess.balancer.snapshot());
+        }
+        return json(res, {
+          strategy: "adaptive",
+          totalExits: 0,
+          activeConnections: 0,
+          perExit: [],
+          hint: "connect first to see balancer stats",
         });
       }
       if (url.pathname === "/api/status") {

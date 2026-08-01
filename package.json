@@ -2,18 +2,23 @@
   "name": "trucvpn-exit-auth",
   "version": "1.0.0",
   "description": "TrucVPN exit node authentication token handshake system",
- "main": "src/handshake/index.ts",
+  "main": "src/handshake/index.ts",
   "types": "src/handshake/index.ts",
   "scripts": {
     "test": "jest",
     "build": "tsc",
     "start": "node dist/index.js"
   },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": ["**/tests/**/*.test.js"]
+  },
   "keywords": [
     "trucvpn",
     "auth",
     "exit-node",
-    "token"
+    "token",
+    "security"
   ],
   "author": "",
   "license": "MIT",
@@ -30,13 +35,6 @@
     "src/**/*.ts",
     "dist/**/*.js",
     "dist/**/*.d.ts"
-  ],
-  "keywords": [
-    "trucvpn",
-    "auth",
-    "exit-node",
-    "token",
-    "security"
   ],
   "repository": {
     "type": "git",

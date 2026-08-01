@@ -5,6 +5,9 @@ const { listExits, pickExit, findExit, sampleExits, summarizeRegions } = require
 const session = require("./session");
 const { startControlDaemon } = require("./dashboard");
 const { formatBytes } = require("./meter");
+const killswitch = require("./killswitch");
+const { validateChain } = require("./multihop");
+const tun = require("./tun");
 const pkg = require("../package.json");
 
 async function main(argv) {
@@ -40,6 +43,11 @@ async function main(argv) {
       return daemonCommand(flags);
     case "doctor":
       return doctorCommand(flags);
+    case "killswitch":
+    case "ks":
+      return killswitchCommand(flags);
+    case "tun":
+      return tunCommand(flags);
     default:
       throw new Error(`unknown command: ${command}`);
   }
@@ -65,6 +73,21 @@ Architecture:
   Sharers earn MRG for bandwidth via: mrgminner share start
 
 MergeOS: https://github.com/mergeos-bounties - Token: MRG
+
+Kill Switch:
+  trucvpn killswitch status       Show kill-switch rule status
+  trucvpn killswitch arm          Arm kill switch (block non-proxy traffic)
+  trucvpn killswitch disarm       Disarm kill switch (restore traffic)
+
+TUN / WireGuard:
+  trucvpn tun status              Show TUN/WireGuard support status
+  trucvpn tun check               Check if TUN mode is available on this host
+
+Multi-hop:
+  trucvpn connect --chain vn-hcm,us-sfo,sg-1   Route through multiple exits
+
+Load Balancer:
+  trucvpn configure --lb-strategy least-connections
 `);
 }
 
@@ -223,6 +246,35 @@ async function daemonCommand(flags) {
 
 function redact(cfg) {
   return { ...cfg };
+}
+
+async function killswitchCommand(flags) {
+  const sub = flags._ && flags._[0] ? flags._[0] : "status";
+  switch (sub) {
+    case "arm":
+      console.log(JSON.stringify(killswitch.arm({ mode: flags.mode || "strict" }), null, 2));
+      return;
+    case "disarm":
+      console.log(JSON.stringify(killswitch.disarm(), null, 2));
+      return;
+    case "status":
+    default:
+      console.log(JSON.stringify(killswitch.status(), null, 2));
+      return;
+  }
+}
+
+async function tunCommand(flags) {
+  const sub = flags._ && flags._[0] ? flags._[0] : "status";
+  switch (sub) {
+    case "check":
+      console.log(JSON.stringify(tun.checkTunSupport(), null, 2));
+      return;
+    case "status":
+    default:
+      console.log(JSON.stringify(tun.tunStatus(), null, 2));
+      return;
+  }
 }
 
 function parseFlags(argv) {

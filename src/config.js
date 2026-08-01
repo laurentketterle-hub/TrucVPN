@@ -19,6 +19,18 @@ const DEFAULTS = {
   preferredRegion: "auto",
   /** MRG billed to consumer per GB through residential exit (mock economy). */
   consumerMrgPerGb: 2,
+  /** Kill switch mode: "strict" (firewall + proxy) or "soft" (proxy only). */
+  killSwitchMode: "strict",
+  /** Multi-hop exit chain definition. */
+  multiHopChain: [],
+  /** Multi-hop fallback strategy: "next-in-chain", "direct", or "abort". */
+  multiHopFallbackStrategy: "next-in-chain",
+  /** Load balancer strategy: "adaptive", "round-robin", "least-connections", "weighted", "latency-weighted". */
+  loadBalancerStrategy: "adaptive",
+  /** Maximum concurrent connections per exit. */
+  maxConnectionsPerExit: 100,
+  /** Enable TUN/WireGuard path (requires kernel support). */
+  tunEnabled: false,
   stateDir: path.join(os.homedir(), ".trucvpn")
 };
 
