@@ -5,6 +5,7 @@ const { createSocks5Server } = require("./proxy/socks5");
 const { createHttpProxyServer } = require("./proxy/http");
 const { loadConfig, saveSession, loadSession } = require("./config");
 const { listExits, pickExit, findExit } = require("./catalog");
+const { createKillSwitch } = require("./killswitch");
 
 /** In-process active VPN session (one per CLI process). */
 let active = null;
@@ -13,11 +14,16 @@ function getActive() {
   return active;
 }
 
-async function connect({ exitId, region, json } = {}) {
+async function connect({ exitId, region, json, allowDirect } = {}) {
   if (active) {
     throw new Error("already connected - disconnect first");
   }
   const config = loadConfig();
+  const killSwitchEnabled = Boolean(config.killSwitch);
+
+  // Create kill-switch guard early
+  const killSwitch = createKillSwitch({ enabled: killSwitchEnabled });
+
   const exits = await listExits(config);
   let exit = exitId ? findExit(exits, exitId) : null;
   if (!exit) {
@@ -45,6 +51,22 @@ async function connect({ exitId, region, json } = {}) {
     }
   }
 
+  // --- Kill-switch pre-flight check ---
+  // Only block if kill-switch is enabled AND the effective exit is direct
+  // AND the user hasn't passed --allow-direct
+  if (killSwitchEnabled && effectiveExit.protocol === "direct" && !allowDirect) {
+    const result = killSwitch.check(effectiveExit);
+    if (result.enforcing) {
+      const hint = effectiveExit.source === "direct-fallback"
+        ? "start the share node (mrgminner share start) or pick a reachable exit; --allow-direct overrides for this run"
+        : "pick a tunneled exit or use --allow-direct to override";
+      throw Object.assign(
+        new Error(`kill switch: ${result.reason} — refusing to leave without the exit\n  ${hint}`),
+        { code: "KILL_SWITCH" }
+      );
+    }
+  }
+
   const meter = new BandwidthMeter();
   const logs = [];
   const onLog = (line) => {
@@ -55,19 +77,23 @@ async function connect({ exitId, region, json } = {}) {
   };
 
   const getExit = () => effectiveExit;
+
+  // Pass killSwitch guard to proxy servers
   const socks = await createSocks5Server({
     host: config.localSocksHost,
     port: config.localSocksPort,
     getExit,
     meter,
-    onLog
+    onLog,
+    killSwitch
   });
   const httpProxy = await createHttpProxyServer({
     host: config.localHttpHost,
     port: config.localHttpPort,
     getExit,
     meter,
-    onLog
+    onLog,
+    killSwitch
   });
 
   const session = {
@@ -77,12 +103,14 @@ async function connect({ exitId, region, json } = {}) {
     requested_exit: exit,
     socks: { host: config.localSocksHost, port: config.localSocksPort },
     http: { host: config.localHttpHost, port: config.localHttpPort },
-    kill_switch: Boolean(config.killSwitch),
+    kill_switch: killSwitchEnabled,
+    kill_switch_overridden: killSwitchEnabled && allowDirect ? true : false,
     split_tunnel: config.splitTunnel || [],
     consumer_mrg_per_gb: config.consumerMrgPerGb,
     meter,
     logs,
     servers: { socks, http: httpProxy },
+    killSwitch,
     status() {
       return {
         id: this.id,
@@ -93,6 +121,8 @@ async function connect({ exitId, region, json } = {}) {
         socks: this.socks,
         http: this.http,
         kill_switch: this.kill_switch,
+        kill_switch_overridden: this.kill_switch_overridden || false,
+        kill_switch_state: this.killSwitch ? this.killSwitch.stats() : { blocked_connections: 0, enforcing: false },
         split_tunnel: this.split_tunnel,
         traffic: this.meter.snapshot(this.consumer_mrg_per_gb),
         recent_logs: this.logs.slice(-10)
@@ -115,6 +145,9 @@ async function connect({ exitId, region, json } = {}) {
     console.log(`  HTTP    ${config.localHttpHost}:${config.localHttpPort}`);
     if (effectiveExit.source === "direct-fallback") {
       console.log("  Note: MRGMinner share offline - using direct dial. Run: mrgminner share start");
+    }
+    if (killSwitchEnabled && allowDirect) {
+      console.log("  kill-switch: overridden by --allow-direct");
     }
   }
   return session;

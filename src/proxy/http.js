@@ -7,8 +7,15 @@ const { connectViaExit } = require("./upstream");
 /**
  * Local HTTP proxy with CONNECT support (browsers / system proxy).
  */
-function createHttpProxyServer({ host, port, getExit, meter, onLog }) {
+function createHttpProxyServer({ host, port, getExit, meter, onLog, killSwitch }) {
   const log = onLog || (() => {});
+  // Passthrough guard if none provided (backwards compat)
+  const guard = killSwitch || { guard: () => ({ allowed: true }), stats: () => ({ blocked_connections: 0 }) };
+
+  const ks403 = (res, reason) => {
+    res.writeHead(403, { "Content-Type": "text/plain" });
+    res.end(`Forbidden: ${reason}`);
+  };
 
   const server = http.createServer((req, res) => {
     // plain HTTP proxy
@@ -17,6 +24,16 @@ function createHttpProxyServer({ host, port, getExit, meter, onLog }) {
     try {
       const u = new URL(req.url);
       const exit = typeof getExit === "function" ? getExit() : null;
+
+      // --- Kill-switch guard for plain HTTP ---
+      const ks = guard.guard(exit, u.hostname, Number(u.port || 80));
+      if (!ks.allowed) {
+        log(`http kill-switch block ${u.hostname}:${u.port || 80} — ${ks.reason}`);
+        ks403(res, ks.reason);
+        cleanup();
+        return;
+      }
+
       connectViaExit(exit, u.hostname, Number(u.port || 80))
         .then((remote) => {
           const headers = { ...req.headers, host: u.host };
@@ -75,6 +92,17 @@ function createHttpProxyServer({ host, port, getExit, meter, onLog }) {
     const [hostName, portStr] = String(req.url || "").split(":");
     const targetPort = Number(portStr || 443);
     const exit = typeof getExit === "function" ? getExit() : null;
+
+    // --- Kill-switch guard for CONNECT ---
+    const ks = guard.guard(exit, hostName, targetPort);
+    if (!ks.allowed) {
+      log(`http-connect kill-switch block ${hostName}:${targetPort} — ${ks.reason}`);
+      clientSocket.write("HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\n\r\n" +
+        `Kill switch: ${ks.reason}\r\n`);
+      cleanup();
+      return;
+    }
+
     connectViaExit(exit, hostName, targetPort)
       .then((remote) => {
         clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");

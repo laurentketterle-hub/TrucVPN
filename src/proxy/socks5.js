@@ -7,8 +7,10 @@ const { connectViaExit } = require("./upstream");
  * Local SOCKS5 server. Client apps point system proxy here.
  * Traffic is dialed via residential exit from MRGMinner share (or direct).
  */
-function createSocks5Server({ host, port, getExit, meter, onLog }) {
+function createSocks5Server({ host, port, getExit, meter, onLog, killSwitch }) {
   const log = onLog || (() => {});
+  // Create a passthrough guard if none provided (backwards compat)
+  const guard = killSwitch || { guard: () => ({ allowed: true }), stats: () => ({ blocked_connections: 0 }) };
 
   const server = net.createServer((client) => {
     meter && meter.openConn();
@@ -104,6 +106,17 @@ function createSocks5Server({ host, port, getExit, meter, onLog }) {
         }
 
         const exit = typeof getExit === "function" ? getExit() : null;
+
+        // --- Kill-switch guard ---
+        const ks = guard.guard(exit, targetHost, targetPort);
+        if (!ks.allowed) {
+          log(`socks kill-switch block ${targetHost}:${targetPort} — ${ks.reason}`);
+          // 0x02 = Connection not allowed by ruleset
+          client.write(Buffer.from([0x05, 0x02, 0x00, 0x01, 0, 0, 0, 0, 0, 0]));
+          cleanup();
+          return;
+        }
+
         let remote;
         try {
           remote = await connectViaExit(exit, targetHost, targetPort);

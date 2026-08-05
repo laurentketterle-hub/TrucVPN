@@ -5,6 +5,7 @@ const { listExits, pickExit, findExit, sampleExits, summarizeRegions } = require
 const session = require("./session");
 const { startControlDaemon } = require("./dashboard");
 const { formatBytes } = require("./meter");
+const { buildPlan, executePlan } = require("./firewall");
 const pkg = require("../package.json");
 
 async function main(argv) {
@@ -40,6 +41,8 @@ async function main(argv) {
       return daemonCommand(flags);
     case "doctor":
       return doctorCommand(flags);
+    case "kill-switch":
+      return killSwitchCommand(flags);
     default:
       throw new Error(`unknown command: ${command}`);
   }
@@ -50,19 +53,27 @@ function help() {
 
 Usage:
   trucvpn version
-  trucvpn configure [--socks-port N] [--http-port N] [--dashboard-host HOST] [--dashboard-port N] [--share-url URL] [--region CODE]
+  trucvpn configure [--kill-switch true|false] [--socks-port N] [--http-port N] [--dashboard-host HOST] [--dashboard-port N] [--share-url URL] [--region CODE]
   trucvpn list [--json]
   trucvpn regions [--json]
-  trucvpn connect [--exit ID] [--region CODE] [--json]
+  trucvpn connect [--exit ID] [--region CODE] [--allow-direct] [--json]
   trucvpn disconnect [--json]
   trucvpn status [--json]
   trucvpn doctor
-  trucvpn demo
+  trucvpn demo [--keep] [--allow-direct]
+  trucvpn kill-switch [--exit ID] [--platform win32|linux|darwin] [--apply] [--revert] [--allow-lan] [--allow-dns]
   trucvpn daemon [--host HOST] [--port N]
 
 Architecture:
   Native apps/extensions -> TrucVPN control daemon -> local SOCKS5/HTTP -> MRGMinner share exit -> Internet
   Sharers earn MRG for bandwidth via: mrgminner share start
+
+Kill Switch:
+  When enabled, TrucVPN refuses to route traffic without a tunneled exit.
+  Enable:  trucvpn configure --kill-switch true
+  Disable: trucvpn configure --kill-switch false
+  Override for one run: trucvpn connect --allow-direct
+  OS firewall rules: trucvpn kill-switch --apply
 
 MergeOS: https://github.com/mergeos-bounties - Token: MRG
 `);
@@ -134,7 +145,8 @@ async function connectCommand(flags) {
   const s = await session.connect({
     exitId: flags.exit || flags.e,
     region: flags.region,
-    json: Boolean(flags.json)
+    json: Boolean(flags.json),
+    allowDirect: Boolean(flags["allow-direct"])
   });
   if (flags.json) {
     console.log(JSON.stringify(s.status(), null, 2));
@@ -170,6 +182,10 @@ async function statusCommand(flags) {
   console.log(`  exit   ${s.exit.id} (${s.exit.protocol})`);
   console.log(`  socks  ${s.socks.host}:${s.socks.port}`);
   console.log(`  http   ${s.http.host}:${s.http.port}`);
+  console.log(`  kill-switch  ${s.kill_switch ? "armed" : "off"}`);
+  if (s.kill_switch_overridden) {
+    console.log(`  kill-switch  overridden (--allow-direct used)`);
+  }
   console.log(
     `  traffic in=${formatBytes(s.traffic.bytes_in)} out=${formatBytes(s.traffic.bytes_out)} mrg~${s.traffic.estimated_mrg_cost}`
   );
@@ -199,7 +215,11 @@ async function demoCommand(flags) {
   console.log("TrucVPN demo");
   console.log(`  catalog exits: ${exits.length}`);
   console.log(`  connecting via ${direct.id} ...`);
-  const s = await session.connect({ exitId: direct.id, json: true });
+  const s = await session.connect({
+    exitId: direct.id,
+    json: true,
+    allowDirect: Boolean(flags["allow-direct"])
+  });
   const st = s.status();
   console.log(`  SOCKS5 ${st.socks.host}:${st.socks.port}`);
   console.log(`  HTTP   ${st.http.host}:${st.http.port}`);
@@ -219,6 +239,60 @@ async function daemonCommand(flags) {
   console.log("Native apps and browser extensions use this local API.");
   console.log("Press Ctrl+C to stop.");
   await new Promise(() => {});
+}
+
+async function killSwitchCommand(flags) {
+  const cfg = loadConfig();
+  const apply = Boolean(flags.apply);
+  const revert = Boolean(flags.revert);
+
+  const exitId = flags.exit || flags.e;
+  const exits = [];
+  if (exitId) {
+    const all = await listExits(cfg);
+    const found = findExit(all, exitId);
+    if (found) exits.push(found);
+  }
+
+  const plan = buildPlan({
+    exits,
+    allowLan: Boolean(flags["allow-lan"]),
+    allowDns: Boolean(flags["allow-dns"]),
+    platform: flags.platform
+  });
+
+  if (apply || revert) {
+    const result = executePlan(plan, { apply, revert });
+    if (result.ok) {
+      console.log(JSON.stringify({ ok: true, action: revert ? "revert" : "apply", count: result.results.length }, null, 2));
+    } else {
+      console.error(JSON.stringify({ ok: false, error: result.error }, null, 2));
+      process.exitCode = 1;
+    }
+  } else {
+    console.log(`Kill-switch firewall plan (${plan.platform})${plan.complete ? "" : " -- INCOMPLETE (unresolvable hosts)"}`);
+    console.log(`Enabled: killSwitch=${cfg.killSwitch}`);
+    console.log(`Rule name: ${plan.ruleName || plan.tableName || plan.anchorName || "(default)"}`);
+    if (plan.error) {
+      console.log(`Error: ${plan.error}`);
+    }
+    console.log("
+-- Apply --");
+    for (const c of plan.commands) {
+      console.log(`  ${c}`);
+    }
+    console.log("
+-- Revert --");
+    for (const c of plan.revert) {
+      console.log(`  ${c}`);
+    }
+    if (!plan.complete) {
+      console.log("
+WARNING: Plan is incomplete. --apply will refuse. Fix exit resolution first.");
+    }
+    console.log("
+Use --apply to execute, --revert to remove rules.");
+  }
 }
 
 function redact(cfg) {
