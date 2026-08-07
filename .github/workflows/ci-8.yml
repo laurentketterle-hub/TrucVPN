@@ -1,0 +1,18 @@
+name: CI #8 - TUN Stub
+on:
+  push:
+    paths: [src/tun/**, .github/workflows/ci-8.yml]
+  pull_request:
+    paths: [src/tun/**, .github/workflows/ci-8.yml]
+jobs:
+  tun-stub:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - run: npm ci --ignore-scripts
+      - name: Type-check TUN stub (no native deps)
+        run: npx tsc --noEmit --target ES2022 --moduleResolution node --strict --esModuleInterop --skipLibCheck src/tun/wintun.ts
+      - name: Doc lint
+        run: test -f docs/design-tun.md && echo "OK: design doc present"
