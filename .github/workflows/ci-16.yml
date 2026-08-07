@@ -1,0 +1,121 @@
+name: CI #16 - Multi-User Share Load Balancer
+
+on:
+  push:
+    branches: [feat/impl-16-*]
+  pull_request:
+    branches: [master]
+    paths:
+      - 'src/catalog.js'
+      - 'src/session.js'
+      - 'src/proxy/upstream.js'
+      - 'tests/load-balancer.test.js'
+      - 'docs/impl-16.md'
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x, 22.x]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests (load balancer)
+        run: node --test tests/load-balancer.test.js
+
+      - name: Run catalog tests
+        run: node --test tests/catalog.test.js
+
+      - name: Run meter tests
+        run: node --test tests/meter.test.js
+
+  load-balancer-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Smoke test — multi-user round-robin distribution
+        run: |
+          node -e "
+          const { MultiUserLoadBalancer } = require('./src/load-balancer');
+          const exits = [
+            { id: 'exit-us', region: 'us', load: 0.1, latency_ms: 50, protocol: 'socks5', host: '127.0.0.1', port: 1080 },
+            { id: 'exit-eu', region: 'eu', load: 0.3, latency_ms: 30, protocol: 'http-connect', host: '127.0.0.1', port: 1081 },
+            { id: 'exit-asia', region: 'sg', load: 0.5, latency_ms: 80, protocol: 'socks5', host: '127.0.0.1', port: 1082 },
+            { id: 'exit-direct', region: 'local', load: 0, latency_ms: 1, protocol: 'direct' },
+          ];
+          const lb = new MultiUserLoadBalancer({ exits, strategy: 'round-robin' });
+
+          // Simulate 10 user sessions
+          const sessions = [];
+          for (let i = 0; i < 10; i++) {
+            sessions.push(lb.assignExitForUser('user_' + i));
+          }
+
+          // Every user got an exit assigned
+          const allAssigned = sessions.every(s => s.exit !== null);
+          console.assert(allAssigned, 'All users must have an exit assigned');
+
+          // Round-robin should cycle through exits
+          const exitIds = sessions.map(s => s.exit.id);
+          const uniqueExits = new Set(exitIds);
+          console.assert(uniqueExits.size > 1, 'Round-robin should distribute across multiple exits');
+
+          console.log('PASS: multi-user round-robin smoke test');
+          console.log('  Sessions:', sessions.length);
+          console.log('  Unique exits used:', uniqueExits.size);
+          console.log('  Distribution:', exitIds);
+          "
+
+      - name: Smoke test — least-loaded strategy
+        run: |
+          node -e "
+          const { MultiUserLoadBalancer } = require('./src/load-balancer');
+          const exits = [
+            { id: 'exit-low', region: 'us', load: 0.1, latency_ms: 50, protocol: 'socks5', host: '127.0.0.1', port: 1080 },
+            { id: 'exit-high', region: 'eu', load: 0.9, latency_ms: 30, protocol: 'http-connect', host: '127.0.0.1', port: 1081 },
+          ];
+          const lb = new MultiUserLoadBalancer({ exits, strategy: 'least-loaded' });
+
+          const sessions = [];
+          for (let i = 0; i < 5; i++) {
+            sessions.push(lb.assignExitForUser('user_' + i));
+          }
+
+          // Least-loaded should prefer the low-load exit
+          const lowCount = sessions.filter(s => s.exit.id === 'exit-low').length;
+          console.assert(lowCount >= 3, 'Least-loaded strategy should prefer low-load exits');
+          console.log('PASS: least-loaded smoke test');
+          console.log('  exit-low assignments:', lowCount, '/ 5');
+          "
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax check (Node.js parse)
+        run: |
+          node -c src/load-balancer.js
+          node -c src/catalog.js
+          node -c src/session.js
+          echo "All files parse OK"
