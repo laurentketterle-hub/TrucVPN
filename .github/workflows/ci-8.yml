@@ -15,11 +15,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: "20" }
-      - name: Install TypeScript
-        run: npm install -g typescript
+      - name: Install TypeScript + Node types
+        run: |
+          npm init -y 2>/dev/null || true
+          npm install --save-dev typescript @types/node
       - name: Type-check TUN stub
         run: >-
-          tsc --noEmit --target ES2022 --moduleResolution node
+          npx tsc --noEmit --target ES2022 --moduleResolution node16 --module nodenext
           --strict --esModuleInterop --skipLibCheck src/tun/wintun.ts
       - name: Doc lint
         run: |
